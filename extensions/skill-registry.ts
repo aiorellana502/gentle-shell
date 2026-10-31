@@ -564,6 +564,7 @@ async function regenerateRegistry(
 
 const watchedCwds = new Set<string>();
 const watcherPolls = new Map<string, ReturnType<typeof setInterval>>();
+const watcherDebounces = new Map<string, ReturnType<typeof setTimeout>>();
 // Startup regeneration runs after session_start returns; watcher refreshes
 // wait for it so an older startup scan never overwrites a newer refresh.
 const pendingStartups = new Map<string, Promise<void>>();
@@ -644,6 +645,9 @@ function closeSkillRegistryWatchers(): void {
 	activeWatchers.clear();
 	for (const poll of watcherPolls.values()) clearInterval(poll);
 	watcherPolls.clear();
+	// A pending debounced refresh would otherwise run after session replacement.
+	for (const timer of watcherDebounces.values()) clearTimeout(timer);
+	watcherDebounces.clear();
 	watchedCwds.clear();
 }
 
@@ -657,13 +661,14 @@ async function startSkillRegistryWatcher(
 		...projectSkillDirs(cwd),
 		...userSkillDirs(),
 	]);
-	let timer: ReturnType<typeof setTimeout> | undefined;
 	// The poll re-asks a state the watchers already answered: without this,
 	// an unchanged tracked-target warning would repeat every poll interval.
 	let lastWarning: string | undefined;
 	const refresh = () => {
-		if (timer) clearTimeout(timer);
-		timer = setTimeout(() => {
+		const pending = watcherDebounces.get(cwd);
+		if (pending) clearTimeout(pending);
+		watcherDebounces.set(cwd, setTimeout(() => {
+			watcherDebounces.delete(cwd);
 			void (async () => {
 				try {
 					await pendingStartups.get(cwd);
@@ -681,7 +686,7 @@ async function startSkillRegistryWatcher(
 					notify(`Skill registry refresh failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 				}
 			})();
-		}, WATCH_DEBOUNCE_MS);
+		}, WATCH_DEBOUNCE_MS));
 	};
 	for (const dir of dirs) {
 		try {
@@ -810,7 +815,14 @@ export default function (pi: ExtensionAPI) {
 		try {
 			if (ctx.hasUI) {
 				await startSkillRegistryWatcher(cwd, (message, level = "info") => {
-					ctx.ui.notify(message, level);
+					// Watcher callbacks outlive the session: after replacement or reload
+					// this ctx is stale and ctx.ui throws, which would crash Pi.
+					if (generation !== startupGeneration) return;
+					try {
+						ctx.ui.notify(message, level);
+					} catch {
+						// A lost notice is harmless; an uncaught stale-ctx error is not.
+					}
 				});
 			}
 		} catch (error) {
