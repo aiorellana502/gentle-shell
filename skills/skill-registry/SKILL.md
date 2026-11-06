@@ -47,5 +47,5 @@ Return:
 
 ## References
 
-- `docs/skill-style-guide.md` — how skills should be authored before indexing.
-- `skills/_shared/skill-resolver.md` — how delegators use the index.
+- `../../docs/skill-style-guide.md` — how skills should be authored before indexing.
+- `../../assets/orchestrator-skills.md` — how delegators use the index (Skill Registry Protocol).
